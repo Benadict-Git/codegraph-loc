@@ -1,0 +1,19 @@
+{
+  "id": "benadictinfanta/cgloc-agent-run",
+  "title": "cgloc agent run",
+  "code_file": "run_agent.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "true",
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": ["benadictinfanta/cgloc-code"],
+  "competition_sources": [],
+  "kernel_sources": ["benadictinfanta/cgloc-llamacpp-smoke"],
+  "model_sources": [
+    "google/gemma-4/gguf/gemma-4-e4b-it-qat-q4_0-gguf/2",
+    "google/gemma-4/gguf/gemma-4-12b-it-qat-q4_0-gguf/2"
+  ]
+}
