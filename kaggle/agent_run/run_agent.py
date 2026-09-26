@@ -32,7 +32,8 @@ def sh(cmd):
 
 
 sh("pip install -q tree-sitter tree-sitter-python unidiff rank-bm25 datasets")
-src = glob.glob("/kaggle/input/**/src/pyproject.toml", recursive=True)[0].rsplit("/", 1)[0]
+src = next(os.path.dirname(p) for p in glob.glob("/kaggle/input/**/pyproject.toml", recursive=True)
+           if os.path.isdir(os.path.join(os.path.dirname(p), "codegraph")))
 shutil.copytree(src, "/tmp/cgloc", dirs_exist_ok=True)
 sh("pip install -q --no-deps -e /tmp/cgloc")
 
