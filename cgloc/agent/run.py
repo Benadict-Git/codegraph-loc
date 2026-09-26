@@ -5,6 +5,7 @@ import argparse
 import concurrent.futures as cf
 import itertools
 import json
+import random
 import threading
 import time
 from dataclasses import asdict
@@ -85,11 +86,16 @@ def main() -> None:
     ap.add_argument("--hint", choices=("bm25", "none"), default="bm25")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--offset", type=int, default=0)
+    ap.add_argument("--sample", type=int, help="random subset of this size (seeded)")
+    ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--cache-dir", default="cache/repos")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
 
     insts = load_instances(args.dataset, args.split)[args.offset:]
+    if args.sample:
+        insts = sorted(random.Random(args.seed).sample(insts, min(args.sample, len(insts))),
+                       key=lambda i: i["instance_id"])
     insts = insts[:args.limit] if args.limit else insts
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

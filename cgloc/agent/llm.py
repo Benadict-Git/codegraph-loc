@@ -38,5 +38,7 @@ class OpenAIChat:
                     raise
                 time.sleep(5 * (attempt + 1))
         usage = resp.get("usage", {})
-        return Reply(resp["choices"][0]["message"].get("content") or "", usage.get("prompt_tokens", 0),
-                     usage.get("completion_tokens", 0), time.time() - t)
+        msg = resp["choices"][0]["message"]
+        # Gemma 4 chat templates may route output into a separate reasoning channel.
+        content = msg.get("content") or msg.get("reasoning_content") or ""
+        return Reply(content, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), time.time() - t)

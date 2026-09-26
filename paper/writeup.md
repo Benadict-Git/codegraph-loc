@@ -178,7 +178,7 @@ python -m cgloc.eval.run_graph_rank      # Section 4.2 (dev selection → test)
 ```
 
 Repositories are read directly from git objects (`git cat-file --batch`) at each base commit, with no checkouts, containers or GPUs. Per-instance predictions, gold locations and summaries are written as JSONL.
-[[TBD: links — public GitHub repo, Kaggle Dataset, Kaggle reproduction notebook]]
+**Code:** https://github.com/Benadict-Git/codegraph-loc (Apache-2.0).
 
 ## References
 
