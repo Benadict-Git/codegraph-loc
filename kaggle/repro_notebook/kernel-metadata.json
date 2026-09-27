@@ -1,0 +1,15 @@
+{
+  "id": "benadictinfanta/codegraph-loc-reproduction",
+  "title": "CodeGraph-Loc reproduction",
+  "code_file": "codegraph-loc-reproduction.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": "false",
+  "enable_gpu": "false",
+  "enable_tpu": "false",
+  "enable_internet": "true",
+  "dataset_sources": ["benadictinfanta/codegraph-loc-swebench-lite"],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

@@ -4,6 +4,9 @@ Laptop-scale repository code graphs and function-level gold locations for studyi
 
 Everything below runs on a CPU. The optional agent experiments run on a free Kaggle T4.
 
+- **Dataset** (graphs, gold locations, all results, agent trajectories): https://www.kaggle.com/datasets/benadictinfanta/codegraph-loc-swebench-lite
+- **Reproduction notebook**: https://www.kaggle.com/code/benadictinfanta/codegraph-loc-reproduction
+
 ## What's inside
 
 | Path | Contents |
@@ -52,6 +55,7 @@ python -m cgloc.eval.run_provided --config top_k=50,beta=0.5,restart=0.5
 ```bash
 python -m cgloc.agent.run --condition files --base-urls http://127.0.0.1:8080 --out outputs/files.jsonl
 python -m cgloc.agent.run --condition graph --base-urls http://127.0.0.1:8080 --out outputs/graph.jsonl
+python -m cgloc.eval.agent_report files=outputs/files.jsonl graph=outputs/graph.jsonl
 ```
 
 ## License

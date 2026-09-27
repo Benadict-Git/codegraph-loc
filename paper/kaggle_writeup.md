@@ -13,9 +13,9 @@ We also audit the code graphs and embeddings shipped with this competition. With
 
 ## 1. Introduction
 
-Coding agents loop between *localize*, *edit* and *validate*. Frontier models can afford to localize with long contexts and many tool calls. A model that fits on one 16 GB T4, such as Gemma 4 E4B or 12B, cannot: every wasted call and every irrelevant file costs accuracy. Localization is therefore a natural target for making local agents competitive. It can also be measured offline, because the reference patch tells us which functions a correct fix touches.
+Coding agents loop between *localize*, *edit* and *validate*. Frontier models localize with long contexts and many tool calls. A model that fits on one 16 GB T4, such as Gemma 4 E4B or 12B, cannot: every wasted call and every irrelevant file costs accuracy. Localization is therefore a natural target for making local agents competitive. It can also be measured offline, because the reference patch tells us which functions a correct fix touches.
 
-Code graphs should help. A call or inheritance edge links an issue that mentions a public API (`QuerySet.update`) to the private helper where the defect lives, even when the helper shares no words with the issue. Existing graph-based systems, however, rely on bespoke pipelines and container-based evaluation that most individual researchers cannot run.
+Code graphs should help. A call or inheritance edge links an issue that mentions a public API (`QuerySet.update`) to the private helper where the defect lives, even when the helper shares no words with the issue. Existing graph-based systems rely on bespoke pipelines and container-based evaluation.
 
 **Contributions.**
 
@@ -54,7 +54,7 @@ Every call edge records *how* it was resolved (`local`, `import`, `self` or `nam
 | `contains` / `calls` / `imports` / `inherits` edges | 7.48M / 11.20M / 1.71M / 1.05M | 32,471 / 32,787 / 7,379 / 1,535 |
 | Build time incl. git reads (laptop CPU) | 630 s | 1.7 s |
 
-The full dataset (graphs plus gold) is 326 MB.
+The dataset (graphs, gold, all results and agent trajectories) is public on Kaggle (§6).
 
 ### 3.2 Function-level gold locations
 
@@ -170,7 +170,9 @@ E4B covers all 300 Lite test instances. 12B covers 144 instances. A first 12B ru
 
 ## 6. Reproducibility
 
-Code: **https://github.com/Benadict-Git/codegraph-loc** (Apache-2.0).
+- **Code:** https://github.com/Benadict-Git/codegraph-loc (Apache-2.0)
+- **Dataset:** https://www.kaggle.com/datasets/benadictinfanta/codegraph-loc-swebench-lite
+- **Reproduction notebook** (CPU; rebuilds all Lite tables and re-runs the pipeline live): https://www.kaggle.com/code/benadictinfanta/codegraph-loc-reproduction
 
 ```bash
 pip install -e ".[dev,swebench]" && pytest   # 29 tests, < 1 s
@@ -180,9 +182,10 @@ python -m cgloc.eval.run_graph_rank          # §4.2, dev selection -> test
 python -m cgloc.eval.run_provided            # §4.3, needs competition data locally
 python kaggle/push_agent.py <name> '<config>' # §4.4 on a Kaggle T4 (llama.cpp + Gemma 4 GGUF)
 python -m cgloc.agent.rescore <runs.jsonl>   # §4.4 scoring from saved raw answers
+python -m cgloc.eval.agent_report a=... b=... # §4.4 tables + bootstrap CIs
 ```
 
-Repositories are read directly from git objects at each base commit, with no checkouts or containers. Only §4.4 needs a GPU.
+Only §4.4 needs a GPU.
 
 ## References
 
