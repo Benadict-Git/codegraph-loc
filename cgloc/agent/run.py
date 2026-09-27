@@ -34,7 +34,9 @@ def owner_entity(cg: CodeGraph, nid: str) -> str:
 def _in_file(cg: CodeGraph, path: str, qual: str) -> str | None:
     """Best definition in `path` whose name matches the last component of `qual` (e.g. a wrong class prefix)."""
     parts = qual.split(".")
-    cands = [n for n in cg.nodes.values() if n["file"] == path and n["kind"] != "file" and n["name"] == parts[-1]]
+    want = parts[-1].lstrip("_")
+    cands = [n for n in cg.nodes.values()
+             if n["file"] == path and n["kind"] != "file" and n["name"].lstrip("_") == want]
     if not cands:
         return None
 
@@ -46,14 +48,27 @@ def _in_file(cg: CodeGraph, path: str, qual: str) -> str | None:
     return max(cands, key=score)["id"]
 
 
+def _prefix(cg: CodeGraph, path: str, qual: str) -> str | None:
+    """Longest existing definition that prefixes `qual` (e.g. `Class.attribute` -> `Class`)."""
+    parts = qual.split(".")
+    for k in range(len(parts) - 1, 0, -1):
+        cand = f"{path}::{'.'.join(parts[:k])}"
+        if cg.get(cand) is not None:
+            return cand
+    return None
+
+
 _LINE_REF = re.compile(r"^(?P<path>.+\.py)(?:::|:L?)(?P<line>\d+)$")
+_LINE_WORD = re.compile(r"\blines?\s*(\d+)", re.I)
 
 
 def normalize(answer: list[str], cg: CodeGraph) -> tuple[list[str], list[str]]:
     """Map free-form answers to (entity ids, file paths), preserving order."""
     ents, files = [], []
     for raw in answer:
-        s = raw.strip().strip("`").split(" ")[0].rstrip(",.")
+        s = raw.strip().strip("`").rstrip(",.")
+        if "::" not in s:
+            s = s.split(" ")[0]
         nid = None
         m = _LINE_REF.match(s)
         if cg.get(s) is not None:
@@ -62,11 +77,14 @@ def normalize(answer: list[str], cg: CodeGraph) -> tuple[list[str], list[str]]:
             nid = cg.locate(m["path"], int(m["line"])) if cg.get(m["path"]) else None
         elif "::" in s:
             path, qual = s.split("::", 1)
-            qual = qual.split("(")[0].strip()
+            line = _LINE_WORD.search(qual)
+            qual = qual.split("(")[0].split(" ")[0].strip()
             if cg.get(f"{path}::{qual}") is not None:
                 nid = f"{path}::{qual}"
+            elif line and cg.get(path):
+                nid = cg.locate(path, int(line.group(1)))
             else:
-                nid = _in_file(cg, path, qual) or (path if cg.get(path) else None)
+                nid = _in_file(cg, path, qual) or _prefix(cg, path, qual) or (path if cg.get(path) else None)
         elif s.endswith(".py"):
             nid = s if cg.get(s) else None
         else:
@@ -109,6 +127,7 @@ def main() -> None:
     ap.add_argument("--offset", type=int, default=0)
     ap.add_argument("--sample", type=int, help="random subset of this size (seeded)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--instances", help="file with one instance_id per line to restrict to")
     ap.add_argument("--cache-dir", default="cache/repos")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
@@ -117,6 +136,9 @@ def main() -> None:
     if args.sample:
         insts = sorted(random.Random(args.seed).sample(insts, min(args.sample, len(insts))),
                        key=lambda i: i["instance_id"])
+    if args.instances:
+        keep = set(Path(args.instances).read_text().split())
+        insts = [i for i in insts if i["instance_id"] in keep]
     insts = insts[:args.limit] if args.limit else insts
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)

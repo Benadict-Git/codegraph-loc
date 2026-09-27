@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 
@@ -49,17 +50,18 @@ gguf = sorted(g for g in glob.glob("/kaggle/input/**/*.gguf", recursive=True)
 log(f"model: {gguf}")
 
 
+def start_one(gpu, extra):
+    logf = open(f"{OUT}/server{gpu}.log", "a")
+    return subprocess.Popen(
+        ["/tmp/llama-bin/llama-server", "-m", gguf, "-ngl", "999",
+         "-c", str(CFG["ctx_per_slot"] * CFG["slots"]), "-np", str(CFG["slots"]), "--jinja", "-fa", "on",
+         "-ctk", "q8_0", "-ctv", "q8_0", "--port", str(8080 + gpu), *extra],
+        stdout=logf, stderr=subprocess.STDOUT, env=dict(env, CUDA_VISIBLE_DEVICES=str(gpu)))
+
+
 def start_servers(extra):
-    servers, urls = [], []
-    for gpu in range(CFG.get("gpus", 2)):
-        port = 8080 + gpu
-        logf = open(f"{OUT}/server{gpu}.log", "a")
-        servers.append(subprocess.Popen(
-            ["/tmp/llama-bin/llama-server", "-m", gguf, "-ngl", "999",
-             "-c", str(CFG["ctx_per_slot"] * CFG["slots"]), "-np", str(CFG["slots"]), "--jinja", "-fa", "on",
-             "-ctk", "q8_0", "-ctv", "q8_0", "--port", str(port), *extra],
-            stdout=logf, stderr=subprocess.STDOUT, env=dict(env, CUDA_VISIBLE_DEVICES=str(gpu))))
-        urls.append(f"http://127.0.0.1:{port}")
+    servers = [start_one(gpu, extra) for gpu in range(CFG.get("gpus", 2))]
+    urls = [f"http://127.0.0.1:{8080 + gpu}" for gpu in range(len(servers))]
     for u, s in zip(urls, servers):
         t = time.time()
         while True:
@@ -92,6 +94,22 @@ def preflight(url):
     return bool((msg.get("content") or "").strip())
 
 
+class Watchdog(threading.Thread):
+    """Restart any llama-server that exits while runs are in progress."""
+
+    def __init__(self, servers, extra):
+        super().__init__(daemon=True)
+        self.servers, self.extra, self.stopped = servers, extra, False
+
+    def run(self):
+        while not self.stopped:
+            for gpu, s in enumerate(self.servers):
+                if s.poll() is not None and not self.stopped:
+                    log(f"server {gpu} exited with {s.returncode}; restarting")
+                    self.servers[gpu] = start_one(gpu, self.extra)
+            time.sleep(20)
+
+
 servers, urls, ok = start_servers([])
 if not ok or not preflight(urls[0]):
     log("content empty or server failed; restarting with --reasoning-budget 0")
@@ -100,7 +118,12 @@ if not ok or not preflight(urls[0]):
     if not ok or not preflight(urls[0]):
         stop(servers)
         sys.exit("servers unusable; see server logs")
+    extra = ["--reasoning-budget", "0"]
+else:
+    extra = []
 log(f"servers ready: {urls}")
+dog = Watchdog(servers, extra)
+dog.start()
 
 try:
     for run in CFG["runs"]:
@@ -113,10 +136,16 @@ try:
         for key in ("limit", "sample"):
             if run.get(key):
                 cmd += [f"--{key}", str(run[key])]
+        if run.get("instances"):
+            ids_file = f"{OUT}/{run['name']}.ids.txt"
+            open(ids_file, "w").write("\n".join(run["instances"]))
+            cmd += ["--instances", ids_file]
+        cmd[cmd.index("--workers") + 1] = str(run.get("workers", CFG["slots"] * len(urls)))
         if run.get("thinking"):
             cmd.append("--thinking")
         log(" ".join(cmd))
         subprocess.run(cmd, check=False)
 finally:
-    stop(servers)
+    dog.stopped = True
+    stop(dog.servers)
 log("done")

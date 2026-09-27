@@ -7,6 +7,8 @@ Small open models that run on a single consumer GPU struggle most with the first
 
 A BM25 baseline finds the right *file* in its top 5 for 70.0% of issues, but finds all gold *functions* for only 36.9%. The bottleneck is within-repository navigation. Graph propagation (BM25-seeded personalized PageRank, tuned on a repository-disjoint dev split) gives a small, tuning-robust gain (36.9 → 38.3 Acc@5).
 
+Used *actively* as agent tools, graphs help more. A Gemma 4 E4B agent running on a free Kaggle T4 reaches 32.8% function-level Acc@1, against 19.7% for BM25. Graph tools add a small, consistent gain over file tools in both E4B and 12B, but the agents use the graph as a symbol index and almost never follow call edges.
+
 We also audit the code graphs and embeddings shipped with this competition. With the retrieval algorithm held fixed, their graph is slightly weaker than ours: it contains only call edges and misses 8.9% of gold entities. Their embeddings can only be queried by an existing symbol name, and 46% of issues contain none. Everything runs on a CPU or a free Kaggle T4.
 
 ## 1. Introduction
@@ -17,11 +19,11 @@ Code graphs should help. A call or inheritance edge links an issue that mentions
 
 **Contributions.**
 
-1. **`codegraph`**: a dependency-light (tree-sitter + stdlib) graph builder with import-aware call resolution, compact gzipped-JSON output, and query primitives (`search`, `callers`, `callees`, `outline`, `neighbors`, `read`, `locate`).
-2. **A function-level localization benchmark**: one graph per SWE-bench Lite instance at its base commit, plus gold files, gold entities and module-level edit flags.
-3. **Baselines and analysis**: BM25 at file and entity level, per-repository breakdowns, and a training-free graph re-ranker with hyper-parameters chosen on a disjoint dev split.
-4. **An audit of the competition's provided graph tools**, holding the retrieval algorithm fixed and swapping only the graph.
-5. **One-command reproducibility on a CPU**, with an Apache-2.0 code release.
+1. **`codegraph`**: a dependency-light graph builder with import-aware call resolution and agent query primitives.
+2. **A function-level localization benchmark**: a graph and gold entities for every SWE-bench Lite instance.
+3. **Baselines**: BM25 and a training-free graph re-ranker tuned on a disjoint dev split.
+4. **An audit of the competition's provided graph tools**, swapping only the graph.
+5. **Gemma 4 agents on a free T4**, comparing file tools with graph tools across two model sizes.
 
 ## 2. Related Work
 
@@ -31,7 +33,7 @@ Code graphs should help. A call or inheritance edge links an issue that mentions
 
 **Code graphs for LLMs.** CodexGraph (Liu et al., 2024) queries a graph database. RepoGraph (Ouyang et al., 2025) adds line-level repository graphs to SWE agents. LocAgent (Chen et al., 2025) trains graph-guided localization agents. We are complementary: we offer a *laptop-scale* builder and a reusable per-instance dataset so that this line of work can be studied on consumer hardware.
 
-**Graph retrieval and training data.** Personalized PageRank (Haveliwala, 2002) propagates relevance from seeds. HippoRAG (Gutiérrez et al., 2024) uses it over knowledge graphs. We seed it with BM25 (Robertson & Zaragoza, 2009). SWE-Gym (Pan et al., 2024) provides executable training environments; our gold locations offer cheap, execution-free supervision for localization.
+**Graph retrieval and training data.** Personalized PageRank (Haveliwala, 2002), as used by HippoRAG (Gutiérrez et al., 2024), propagates relevance from seeds; we seed it with BM25 (Robertson & Zaragoza, 2009). SWE-Gym (Pan et al., 2024) offers executable training environments; our gold locations give execution-free supervision.
 
 ## 3. The CodeGraph-Loc Resource
 
@@ -105,7 +107,7 @@ Propagation trades −1.8 at rank 1 for +1.0 to +1.8 at ranks 3–10. It surface
 
 The competition ships, for each of its 129 public dev tasks (fastapi, rich, requests, httpx), a NetworkX code graph and 256-d node embeddings. These back the harness tools `get_code_neighbors`, `get_code_subgraph` and `search_similar_code`. We consume them locally and do not redistribute them.
 
-**Protocol.** Gold entities come from our extractor (121 tasks have at least one). Provided node ids (dotted symbols) are mapped to ours by longest dotted-suffix match, and all methods are scored on the same candidates. Graph propagation reuses the Lite-dev configuration unchanged. We compare BM25; BM25+PPR over `codegraph`; the *same* BM25+PPR over the **provided** graph (only the graph changes); and the provided embeddings used as the harness allows. The sandbox has no text encoder, so `search_similar_code` must resolve its query to an existing node name. We emulate an agent that feeds each identifier-like token in the issue through the harness's 4-tier name resolution and interleaves the top-10 neighbours.
+**Protocol.** Gold entities come from our extractor (121 tasks have at least one). Provided node ids are mapped to ours by longest dotted-suffix match, and PPR reuses the Lite-dev configuration unchanged. We compare BM25; BM25+PPR over `codegraph`; the *same* BM25+PPR over the **provided** graph; and the provided embeddings used as the harness allows. The sandbox has no text encoder, so `search_similar_code` must resolve its query to an existing node name. We emulate an agent that feeds each identifier-like token of the issue through the harness's name resolution and interleaves the top-10 neighbours.
 
 | Entity level, competition dev (n=121) | Acc@1 | Acc@5 | Acc@10 | Recall@10 |
 |---|---|---|---|---|
@@ -129,9 +131,34 @@ The competition ships, for each of its 129 public dev tasks (fastapi, rich, requ
 - **With the algorithm fixed, the provided graph is slightly weaker.** It has only call edges and is dominated by tests (3,252 of 4,259 nodes in one fastapi snapshot). It lacks 46 of 515 gold entities (8.9%), and in that snapshot also misses 33 non-test library functions (e.g. `fastapi/exception_handlers.py::websocket_request_validation_exception_handler`).
 - **The embeddings are hard to use from issue text.** 56 of 121 issues (46%) contain no resolvable symbol, and neighbour search around mentioned symbols trails BM25 by half (13.2 vs 27.3 Acc@5). The practical advice for agents is to call `search_similar_code` only *after* a lexical or graph step has found a relevant symbol.
 
-### 4.4 In progress: graph tools for small Gemma 4 agents
+### 4.4 Graph tools for small Gemma 4 agents on a free T4
 
-*This section will be updated before the deadline.* We run Gemma 4 E4B and 12B (4-bit GGUF, llama.cpp) on free Kaggle T4s as JSON tool-calling localization agents with a 12-call budget. Condition (A) has only `grep`, `list_dir` and `read_file`. Condition (B) adds `codegraph`'s `search`, `outline`, `read_entity`, `callers` and `callees`. Both receive the same BM25 file hint. Measured throughput on 2×T4 is 50 tok/s single-stream and 153 tok/s with 4 parallel requests for E4B (29 and 80 tok/s for 12B), so full SWE-bench Lite runs fit the free weekly GPU quota. We will report accuracy with tool calls, tokens and time per issue, and release all trajectories.
+**Setup.** We serve Gemma 4 E4B and 12B (instruction-tuned, 4-bit QAT GGUF) with llama.cpp on Kaggle's free 2×T4: one server per GPU, 4 parallel slots, greedy decoding, thinking off. Measured E4B throughput is 50 tok/s single-stream and 153 tok/s with 4 parallel requests. The agent is a JSON tool-calling loop with a 12-call budget. Both conditions share the same prompt and the same top-10 BM25 file hint:
+
+- **(A) files:** `grep`, `list_dir`, `read_file`.
+- **(B) graph:** (A) plus `codegraph`'s `search`, `outline`, `read_entity`, `callers` and `callees`.
+
+The agent returns up to 5 `path::Qualname` answers. We map them to entities identically in both conditions: exact id, then line reference, then name within the file, then enclosing class. We report the agent's own list and a **+fill** variant that appends BM25's entity ranking after the agent's picks.
+
+E4B covers all 300 Lite test instances. 12B covers 144 instances. A first 12B run lost one of its two servers to host-RAM exhaustion, and these are the instances the surviving server completed. Their repository mix mirrors the full set, and both 12B conditions use exactly these instances.
+
+| Lite test (entity n) | Acc@1 | Acc@5 +fill | Acc@10 +fill | File Acc@1 | Unanswered | Calls | Time/issue |
+|---|---|---|---|---|---|---|---|
+| BM25 (290) | 19.7 | 36.9 | 47.6 | 43.3 | – | – | – |
+| E4B, files (290) | 29.0 | 49.0 | 56.9 | 63.0 | 39 | 6.6 | 53 s |
+| E4B, + graph (290) | **32.8** | **50.7** | **57.2** | **67.0** | **32** | 7.4 | 63 s |
+| BM25 (139) | 22.3 | 41.7 | 55.4 | 46.5 | – | – | – |
+| 12B, files (139) | 43.9 | 58.3 | 69.8 | 77.1 | 14 | 6.7 | minutes* |
+| 12B, + graph (139) | **47.5** | **64.7** | **73.4** | **77.8** | **4** | 7.6 | minutes* |
+
+\*12B timings include server restarts after host-RAM kills, so they are not comparable.
+
+**Findings** (paired bootstrap, 95% CI):
+
+1. **A 4B-effective model on a free T4 clearly beats lexical retrieval.** E4B with graph tools improves Acc@1 over BM25 by **+13.1** [+7.6, +19.0]. With BM25 fill, Acc@5 improves by **+13.8** [+10.0, +17.9]. File-level Acc@1 rises from 43.3 to 67.0, at about one minute per issue.
+2. **Model size matters most.** On the shared 139 instances, 12B beats E4B by **+10.1 Acc@1** in both conditions (files [+2.9, +17.3]; graph [+2.2, +18.0]).
+3. **Graph tools help consistently but modestly.** They add +3.8 (E4B) and +3.6 (12B) Acc@1, and +1.7 and +6.5 Acc@5 with fill. None of these is individually significant (smallest p = 0.06, for 12B Acc@5). Graph agents also leave fewer issues unanswered (32 vs 39; 4 vs 14) and emit fewer malformed replies.
+4. **Agents use the graph as a symbol index, not as a graph.** Across 444 graph-condition episodes, `callers` was called 9 times and `callees` never. The gain comes from `search`, `read_entity` and `outline`, which replace grep-then-read sequences. Together with §4.2, this suggests that call edges are under-used by small models. Training or prompting explicit edge traversal is the natural next step.
 
 ## 5. Limitations
 
@@ -139,20 +166,23 @@ The competition ships, for each of its 129 public dev tasks (fastapi, rich, requ
 - **Python only for now.** Only the grammar and resolution rules are language-specific.
 - **Localization is necessary, not sufficient,** for repair. Its advantage is that it can be evaluated anywhere in seconds.
 - **Reference patches show one valid fix,** so Acc@k is a conservative estimate.
+- **The 12B subset is not a random sample,** and two 12B servers on one T4 machine exceed host RAM. The E4B results use the full set.
 
 ## 6. Reproducibility
 
 Code: **https://github.com/Benadict-Git/codegraph-loc** (Apache-2.0).
 
 ```bash
-pip install -e ".[dev,swebench]" && pytest   # 25 tests, < 1 s
+pip install -e ".[dev,swebench]" && pytest   # 29 tests, < 1 s
 python -m cgloc.eval.run_bm25                # §4.1
 python -m cgloc.data.build_dataset           # graphs + gold, ~10 min CPU
 python -m cgloc.eval.run_graph_rank          # §4.2, dev selection -> test
 python -m cgloc.eval.run_provided            # §4.3, needs competition data locally
+python kaggle/push_agent.py <name> '<config>' # §4.4 on a Kaggle T4 (llama.cpp + Gemma 4 GGUF)
+python -m cgloc.agent.rescore <runs.jsonl>   # §4.4 scoring from saved raw answers
 ```
 
-Repositories are read directly from git objects at each base commit, with no checkouts, containers or GPUs.
+Repositories are read directly from git objects at each base commit, with no checkouts or containers. Only §4.4 needs a GPU.
 
 ## References
 

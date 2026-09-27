@@ -19,7 +19,7 @@ Everything below runs on a CPU. The optional agent experiments run on a free Kag
 
 ```bash
 pip install -e ".[dev,swebench]"
-pytest                                          # 25 unit tests, < 1 s
+pytest                                          # 29 unit tests, < 1 s
 
 codegraph-build path/to/repo -o graph.json.gz   # graph for any Python repo
 ```

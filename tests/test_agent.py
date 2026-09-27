@@ -71,7 +71,7 @@ def test_normalize_answers():
     _, cg, _ = _env()
     ents, files = normalize(["`pkg/models.py::Model.save`", "Model.outer.inner", "slugify()", "pkg/utils.py",
                              "pkg/models.py::Model.missing", "nonsense_zzz"], cg)
-    assert ents == [f"{M}::Model.save", f"{M}::Model.outer", "pkg/utils.py::slugify"]
+    assert ents == [f"{M}::Model.save", f"{M}::Model.outer", "pkg/utils.py::slugify", f"{M}::Model"]
     assert files[:2] == [M, "pkg/utils.py"]
 
 
@@ -98,3 +98,12 @@ def test_normalize_line_refs_and_wrong_prefix():
     line = MODELS_LINES.index('        utils.log("saved")') + 1
     ents, _ = normalize([f"{M}::{line}", f"{M}:L{line}", "pkg/models.py::Wrong.validate", "pkg/models.py::slug"], cg)
     assert ents == [f"{M}::Model.save", f"{M}::Base.validate", f"{M}::Model.slug"]
+
+
+def test_normalize_near_misses():
+    _, cg, _ = _env()
+    line = MODELS_LINES.index('        utils.log("saved")') + 1
+    ents, files = normalize([f"{M}::line {line}", f"{M}::Model.name", "pkg/utils.py::_slugify",
+                             "pkg/models.py::UNKNOWN_CONSTANT"], cg)
+    assert ents == [f"{M}::Model.save", f"{M}::Model", "pkg/utils.py::slugify"]
+    assert M in files
