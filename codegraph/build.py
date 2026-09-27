@@ -282,7 +282,11 @@ def save_graph(graph: dict, path: str | Path) -> None:
 
 
 def load_graph(path: str | Path) -> dict:
-    with gzip.open(path, "rt", encoding="utf-8") as f:
+    """Load a graph saved as gzipped or plain JSON (Kaggle datasets store .gz files decompressed)."""
+    with open(path, "rb") as f:
+        gzipped = f.read(2) == b"\x1f\x8b"
+    opener = gzip.open if gzipped else open
+    with opener(path, "rt", encoding="utf-8") as f:
         return json.load(f)
 
 

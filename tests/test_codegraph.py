@@ -93,3 +93,11 @@ def test_roundtrip_and_query(tmp_path):
     assert f"{M}::Model.outer.inner" not in outline
     hop1 = dict(cg.neighbors(f"{M}::Model.save"))
     assert hop1[f"{M}::Model"] == 1 and hop1["pkg/utils.py::log"] == 1
+
+
+def test_load_graph_accepts_plain_and_gzipped_json(tmp_path):
+    import json
+    graph = _graph()
+    (tmp_path / "g.json").write_text(json.dumps(graph))
+    save_graph(graph, tmp_path / "g.json.gz")
+    assert load_graph(tmp_path / "g.json") == load_graph(tmp_path / "g.json.gz") == graph
