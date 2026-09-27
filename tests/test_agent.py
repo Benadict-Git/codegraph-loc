@@ -5,7 +5,9 @@ from cgloc.agent.llm import Reply
 from cgloc.agent.loop import extract_json, run_episode
 from cgloc.agent.run import normalize
 from cgloc.agent.tools import Workspace, call_tool, file_tools, graph_tools
-from fixture_repo import sources_bytes
+from fixture_repo import MODELS, sources_bytes
+
+MODELS_LINES = MODELS.splitlines()
 
 M = "pkg/models.py"
 
@@ -71,3 +73,28 @@ def test_normalize_answers():
                              "pkg/models.py::Model.missing", "nonsense_zzz"], cg)
     assert ents == [f"{M}::Model.save", f"{M}::Model.outer", "pkg/utils.py::slugify"]
     assert files[:2] == [M, "pkg/utils.py"]
+
+
+def test_parse_final_variants():
+    from cgloc.agent.loop import parse_final
+    assert parse_final({"final": ["a", "b"]}) == ["a", "b"]
+    assert parse_final({"tool": "final", "args": {"locations": ["a"]}}) == ["a"]
+    assert parse_final({"tool": "Final", "args": {"answer": "a"}}) == ["a"]
+    assert parse_final({"tool": "submit", "args": ["a"]}) == ["a"]
+    assert parse_final({"tool": "final", "args": {}}) == []
+    assert parse_final({"tool": "grep", "args": {"pattern": "x"}}) is None
+    assert parse_final(None) is None
+
+
+def test_final_submitted_as_tool_ends_episode():
+    ws, cg, _ = _env()
+    replies = iter(['{"tool": "final", "args": {"locations": ["pkg/utils.py::log"]}}'])
+    ep = run_episode("x", "r", file_tools(ws), lambda m: Reply(next(replies), 1, 1, 0.0), budget=3)
+    assert ep["final"] == ["pkg/utils.py::log"] and ep["tool_calls"] == 0
+
+
+def test_normalize_line_refs_and_wrong_prefix():
+    _, cg, _ = _env()
+    line = MODELS_LINES.index('        utils.log("saved")') + 1
+    ents, _ = normalize([f"{M}::{line}", f"{M}:L{line}", "pkg/models.py::Wrong.validate", "pkg/models.py::slug"], cg)
+    assert ents == [f"{M}::Model.save", f"{M}::Base.validate", f"{M}::Model.slug"]

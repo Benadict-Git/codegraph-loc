@@ -8,6 +8,7 @@ import sys
 import time
 import urllib.request
 
+# CFG-BEGIN
 CFG = {
     "model_key": "e4b",
     "gpus": 2,
@@ -18,6 +19,7 @@ CFG = {
         {"name": "pilot_e4b_graph", "condition": "graph", "sample": 40},
     ],
 }
+# CFG-END
 OUT = "/kaggle/working"
 json.dump(CFG, open(f"{OUT}/agent_config.json", "w"), indent=2)
 

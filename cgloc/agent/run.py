@@ -6,6 +6,7 @@ import concurrent.futures as cf
 import itertools
 import json
 import random
+import re
 import threading
 import time
 from dataclasses import asdict
@@ -18,7 +19,7 @@ from cgloc.agent.tools import Workspace, file_tools, graph_tools
 from cgloc.data.checkout import ensure_clone, ensure_commit, read_files
 from cgloc.data.gold import gold_locations
 from cgloc.data.swebench import load_instances
-from cgloc.eval.bm25 import rank_files
+from cgloc.eval.bm25 import rank_files, score_entities
 from cgloc.eval.metrics import aggregate, rank_metrics
 
 CONDITIONS = ("files", "graph")
@@ -30,22 +31,42 @@ def owner_entity(cg: CodeGraph, nid: str) -> str:
     return nid
 
 
+def _in_file(cg: CodeGraph, path: str, qual: str) -> str | None:
+    """Best definition in `path` whose name matches the last component of `qual` (e.g. a wrong class prefix)."""
+    parts = qual.split(".")
+    cands = [n for n in cg.nodes.values() if n["file"] == path and n["kind"] != "file" and n["name"] == parts[-1]]
+    if not cands:
+        return None
+
+    def score(n):
+        own = n["id"].split("::", 1)[1].split(".")
+        suffix = sum(1 for a, b in zip(reversed(own), reversed(parts)) if a == b)
+        return (suffix, not n.get("nested"), -n["start"])
+
+    return max(cands, key=score)["id"]
+
+
+_LINE_REF = re.compile(r"^(?P<path>.+\.py)(?:::|:L?)(?P<line>\d+)$")
+
+
 def normalize(answer: list[str], cg: CodeGraph) -> tuple[list[str], list[str]]:
     """Map free-form answers to (entity ids, file paths), preserving order."""
     ents, files = [], []
     for raw in answer:
-        s = raw.strip().strip("`").split(" ")[0].replace(":L", "::").rstrip(",.")
+        s = raw.strip().strip("`").split(" ")[0].rstrip(",.")
         nid = None
+        m = _LINE_REF.match(s)
         if cg.get(s) is not None:
             nid = s
+        elif m:
+            nid = cg.locate(m["path"], int(m["line"])) if cg.get(m["path"]) else None
         elif "::" in s:
             path, qual = s.split("::", 1)
-            qual = qual.split("(")[0]
+            qual = qual.split("(")[0].strip()
             if cg.get(f"{path}::{qual}") is not None:
                 nid = f"{path}::{qual}"
             else:
-                hits = [h["id"] for h in cg.search(qual, limit=20) if h["file"] == path]
-                nid = hits[0] if hits else (path if cg.get(path) else None)
+                nid = _in_file(cg, path, qual) or (path if cg.get(path) else None)
         elif s.endswith(".py"):
             nid = s if cg.get(s) else None
         else:
@@ -114,17 +135,19 @@ def main() -> None:
             url = next(urls)
         llm = OpenAIChat(url, max_tokens=args.max_tokens, thinking=args.thinking)
         tools = file_tools(ws) + (graph_tools(cg) if args.condition == "graph" else [])
-        hint = ""
-        if args.hint == "bm25":
-            top = rank_files(inst["problem_statement"], ws.sources)[:10]
-            hint = "Files that lexically match the issue (may be wrong):\n" + "\n".join(top)
+        top = rank_files(inst["problem_statement"], ws.sources)[:10]
+        hint = ("Files that lexically match the issue (may be wrong):\n" + "\n".join(top)) if args.hint == "bm25" else ""
         ep = run_episode(inst["problem_statement"], inst["repo"], tools, llm, budget=args.budget, hint=hint)
         ents, files = normalize(ep["final"], cg)
         py_gold_files = [f for f in gold["files"] if f.endswith(".py")]
+        bm25 = score_entities(inst["problem_statement"], ws.sources, files=top)
+        backfill = list(dict.fromkeys(ents + sorted(bm25, key=lambda i: -bm25[i])))
         return {
             "instance_id": inst["instance_id"], "repo": inst["repo"], "condition": args.condition,
             "gold": gold, "raw_final": ep["final"], "pred_entities": ents, "pred_files": files,
             "entity": rank_metrics(ents, gold["entities"]), "file": rank_metrics(files, py_gold_files),
+            "entity_backfill": rank_metrics(backfill, gold["entities"]),
+            "file_backfill": rank_metrics(list(dict.fromkeys(files + top)), py_gold_files),
             **{k: ep[k] for k in ("tool_calls", "invalid", "secs", "prompt_tokens", "completion_tokens", "llm_secs")},
             "steps": ep["steps"], "messages": ep["messages"],
         }
@@ -148,6 +171,9 @@ def main() -> None:
     rows = [json.loads(line) for line in out.read_text().splitlines() if line.strip()]
     summary = {"condition": args.condition, "n": len(rows),
                "entity": aggregate(r["entity"] for r in rows), "file": aggregate(r["file"] for r in rows),
+               "entity_backfill": aggregate(r.get("entity_backfill") for r in rows),
+               "file_backfill": aggregate(r.get("file_backfill") for r in rows),
+               "empty_answers": sum(not r["pred_entities"] for r in rows),
                "mean_tool_calls": sum(r["tool_calls"] for r in rows) / max(len(rows), 1),
                "mean_secs": sum(r["secs"] for r in rows) / max(len(rows), 1),
                "mean_completion_tokens": sum(r["completion_tokens"] for r in rows) / max(len(rows), 1)}

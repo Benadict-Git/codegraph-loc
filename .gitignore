@@ -5,3 +5,4 @@ __pycache__/
 cache/
 outputs/
 kaggle/.code_dataset/
+kaggle/.build/
