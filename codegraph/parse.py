@@ -9,6 +9,8 @@ PY_LANGUAGE = Language(tspython.language())
 _parser = Parser(PY_LANGUAGE)
 
 _DEF_TYPES = ("function_definition", "class_definition")
+# Receiver marker for attribute calls on a non-identifier object, e.g. `os.path.join()` or `f().g()`.
+COMPLEX_RECEIVER = "?"
 
 
 @dataclass
@@ -143,7 +145,7 @@ def parse_source(src: bytes) -> FileInfo:
             elif fn is not None and fn.type == "attribute":
                 obj = fn.child_by_field_name("object")
                 call = (_text(fn.child_by_field_name("attribute")),
-                        _text(obj) if obj is not None and obj.type == "identifier" else None)
+                        _text(obj) if obj is not None and obj.type == "identifier" else COMPLEX_RECEIVER)
             if call is not None and call not in seen_calls.setdefault(owner, set()):
                 seen_calls[owner].add(call)
                 defs[owner].calls.append(Call(*call))

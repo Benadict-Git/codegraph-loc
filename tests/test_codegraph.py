@@ -101,3 +101,17 @@ def test_load_graph_accepts_plain_and_gzipped_json(tmp_path):
     (tmp_path / "g.json").write_text(json.dumps(graph))
     save_graph(graph, tmp_path / "g.json.gz")
     assert load_graph(tmp_path / "g.json") == load_graph(tmp_path / "g.json.gz") == graph
+
+
+def test_no_false_edges_for_complex_receivers_or_builtin_methods():
+    srcs = {
+        "lib/strings.py": "def join(parts):\n    return ''.join(parts)\n",
+        "lib/mixins.py": "class ListMixin:\n    def extend(self, v):\n        pass\n\n    def frobnicate(self):\n        pass\n",
+        "lib/use.py": ("import os\n\n\ndef f(items, x):\n    os.path.join('a', 'b')\n    items.extend([1])\n"
+                       "    x.frobnicate()\n    make().frobnicate()\n"),
+    }
+    calls = _edges(build_graph({k: v.encode() for k, v in srcs.items()}), "calls")
+    targets = {d for s, d in calls if s == "lib/use.py::f"}
+    assert "lib/strings.py::join" not in targets
+    assert "lib/mixins.py::ListMixin.extend" not in targets
+    assert targets == {"lib/mixins.py::ListMixin.frobnicate"}

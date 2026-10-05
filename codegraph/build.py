@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import builtins
+import io
 import gzip
 import hashlib
 import json
@@ -16,6 +17,11 @@ FORMAT = "codegraph/v1"
 SKIP_DIRS = {".git", ".hg", ".svn", "__pycache__", "node_modules", ".tox", ".nox", ".venv", "venv",
              ".eggs", "build", "dist", "site-packages"}
 _BUILTINS = set(dir(builtins))
+# Methods of builtin/stdlib types: an attribute call with one of these names on an unknown receiver is far more
+# likely `list.extend`/`dict.get`/`file.read` than a same-named method somewhere in the repository.
+_BUILTIN_METHODS = {m for t in (object, list, dict, set, frozenset, str, bytes, bytearray, tuple, int, float,
+                                complex, type, io.IOBase, io.TextIOWrapper, io.BytesIO)
+                    for m in dir(t)} | {"join", "split", "exists", "dirname", "basename", "abspath", "getattr"}
 _MAX_NAME_CANDIDATES = 3
 _MAX_DEPTH = 5
 
@@ -253,6 +259,8 @@ def _resolve_call(r: _Resolver, path: str, d: Definition, cls: str | None, name:
         if target:
             found = r.member(target, name)
             return ([found], "import") if found else ([], "")
+    if name in _BUILTIN_METHODS:
+        return [], ""
     cands = r.methods_by_name.get(name, [])
     if len(cands) == 1:
         return cands, "name"
