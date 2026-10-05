@@ -15,14 +15,14 @@ from pathlib import Path
 from codegraph import CodeGraph, build_graph
 from cgloc.agent.llm import OpenAIChat
 from cgloc.agent.loop import run_episode
-from cgloc.agent.tools import Workspace, file_tools, graph_tools
+from cgloc.agent.tools import Workspace, expanded_graph_tools, file_tools, graph_tools, provided_tools
 from cgloc.data.checkout import ensure_clone, ensure_commit, read_files
 from cgloc.data.gold import gold_locations
 from cgloc.data.swebench import load_instances
 from cgloc.eval.bm25 import rank_files, score_entities
 from cgloc.eval.metrics import aggregate, rank_metrics
 
-CONDITIONS = ("files", "graph")
+CONDITIONS = ("files", "graph", "expanded", "provided")
 
 
 def owner_entity(cg: CodeGraph, nid: str) -> str:
@@ -62,6 +62,19 @@ _LINE_REF = re.compile(r"^(?P<path>.+\.py)(?:::|:L?)(?P<line>\d+)$")
 _LINE_WORD = re.compile(r"\blines?\s*(\d+)", re.I)
 
 
+def _dotted(cg: CodeGraph, s: str) -> str | None:
+    """Map a dotted symbol (`pkg.module.Class.method`) to a node via the longest matching module name."""
+    modules = {n["module"]: n["id"] for n in cg.nodes.values() if n["kind"] == "file" and n.get("module")}
+    parts = s.split(".")
+    for k in range(len(parts) - 1, 0, -1):
+        path = modules.get(".".join(parts[:k]))
+        if path is not None:
+            qual = ".".join(parts[k:])
+            exact = f"{path}::{qual}"
+            return exact if cg.get(exact) is not None else (_in_file(cg, path, qual) or _prefix(cg, path, qual) or path)
+    return modules.get(s)
+
+
 def normalize(answer: list[str], cg: CodeGraph) -> tuple[list[str], list[str]]:
     """Map free-form answers to (entity ids, file paths), preserving order."""
     ents, files = [], []
@@ -88,8 +101,11 @@ def normalize(answer: list[str], cg: CodeGraph) -> tuple[list[str], list[str]]:
         elif s.endswith(".py"):
             nid = s if cg.get(s) else None
         else:
-            hits = cg.search(s.split("(")[0], limit=1)
-            nid = hits[0]["id"] if hits else None
+            name = s.split("(")[0]
+            nid = _dotted(cg, name) if "." in name and "/" not in name else None
+            if nid is None:
+                hits = cg.search(name, limit=1)
+                nid = hits[0]["id"] if hits else None
         if nid is None:
             continue
         node = cg.get(nid)
@@ -100,6 +116,20 @@ def normalize(answer: list[str], cg: CodeGraph) -> tuple[list[str], list[str]]:
         ents.append(nid)
         files.append(cg.get(nid)["file"])
     return list(dict.fromkeys(ents)), list(dict.fromkeys(files))
+
+
+def condition_tools(condition: str, cg: CodeGraph, inst: dict, provided_dir: str | None) -> list:
+    if condition == "graph":
+        return graph_tools(cg)
+    if condition == "expanded":
+        return expanded_graph_tools(cg)
+    if condition == "provided":
+        import numpy as np
+
+        stem = f"{inst['repo'].split('/')[1]}_{inst['base_commit']}"
+        graph = json.loads((Path(provided_dir) / "graphs" / f"{stem}.json").read_text())
+        return provided_tools(graph, np.load(Path(provided_dir) / "embeddings" / f"{stem}.npz"))
+    return []
 
 
 def prepare(inst: dict, cache_dir: Path) -> tuple[dict, CodeGraph, Workspace]:
@@ -117,6 +147,7 @@ def main() -> None:
     ap.add_argument("--dataset", default="lite", help="'lite', 'verified' or a tasks .jsonl")
     ap.add_argument("--split", default="test")
     ap.add_argument("--condition", choices=CONDITIONS, required=True)
+    ap.add_argument("--provided-dir", help="competition data dir with graphs/ and embeddings/ (condition 'provided')")
     ap.add_argument("--base-urls", default="http://127.0.0.1:8080", help="comma-separated servers")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--budget", type=int, default=12)
@@ -156,7 +187,7 @@ def main() -> None:
         with lock:
             url = next(urls)
         llm = OpenAIChat(url, max_tokens=args.max_tokens, thinking=args.thinking)
-        tools = file_tools(ws) + (graph_tools(cg) if args.condition == "graph" else [])
+        tools = file_tools(ws) + condition_tools(args.condition, cg, inst, args.provided_dir)
         top = rank_files(inst["problem_statement"], ws.sources)[:10]
         hint = ("Files that lexically match the issue (may be wrong):\n" + "\n".join(top)) if args.hint == "bm25" else ""
         ep = run_episode(inst["problem_statement"], inst["repo"], tools, llm, budget=args.budget, hint=hint)

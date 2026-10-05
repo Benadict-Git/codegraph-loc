@@ -126,9 +126,14 @@ dog = Watchdog(servers, extra)
 dog.start()
 
 try:
+    comp_dir = next((os.path.dirname(p) for p in glob.glob("/kaggle/input/**/tasks.jsonl", recursive=True)
+                     if os.path.isdir(os.path.join(os.path.dirname(p), "graphs"))), None)
     for run in CFG["runs"]:
         out = f"{OUT}/{run['name']}.jsonl"
-        cmd = [sys.executable, "-m", "cgloc.agent.run", "--dataset", run.get("dataset", "lite"),
+        dataset = run.get("dataset", "lite")
+        if dataset == "competition":
+            dataset = os.path.join(comp_dir, "tasks.jsonl")
+        cmd = [sys.executable, "-m", "cgloc.agent.run", "--dataset", dataset,
                "--split", run.get("split", "test"), "--condition", run["condition"],
                "--base-urls", ",".join(urls), "--workers", str(CFG["slots"] * len(urls)),
                "--budget", str(run.get("budget", 12)), "--max-tokens", str(run.get("max_tokens", 1024)),
@@ -136,6 +141,8 @@ try:
         for key in ("limit", "sample"):
             if run.get(key):
                 cmd += [f"--{key}", str(run[key])]
+        if run["condition"] == "provided":
+            cmd += ["--provided-dir", comp_dir]
         if run.get("instances"):
             ids_file = f"{OUT}/{run['name']}.ids.txt"
             open(ids_file, "w").write("\n".join(run["instances"]))

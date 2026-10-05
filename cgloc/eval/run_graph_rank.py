@@ -46,12 +46,52 @@ def evaluate(insts: list[dict], cache_dir: Path) -> dict[str, list]:
     return results
 
 
+def evaluate_fixed(insts: list[dict], cache_dir: Path, top_k: int, beta: float, restart: float) -> list[dict]:
+    """Per-instance BM25 vs BM25+PPR metrics for one fixed configuration."""
+    rows = []
+    parse_cache: dict[str, dict] = defaultdict(dict)
+    for n, inst in enumerate(insts, 1):
+        clone = ensure_clone(inst["repo"], cache_dir)
+        ensure_commit(clone, inst["base_commit"])
+        sources = read_files(clone, inst["base_commit"])
+        gold = gold_locations(inst["patch"], sources.get)
+        if not gold.entities:
+            continue
+        q = inst["problem_statement"]
+        bm25 = score_entities(q, sources, files=rank_files(q, sources)[:TOP_FILES])
+        adj, entities = entity_adjacency(build_graph(sources, cache=parse_cache[inst["repo"]]))
+        ppr_rank = mix(bm25, seeded_ppr(bm25, adj, top_k, restart), entities, beta)
+        rows.append({"instance_id": inst["instance_id"], "repo": inst["repo"],
+                     "bm25": rank_metrics(sorted(bm25, key=lambda i: -bm25[i]), gold.entities),
+                     "ppr": rank_metrics(ppr_rank, gold.entities), "pred_ppr": ppr_rank[:20]})
+        print(f"[{n}/{len(insts)}] {inst['instance_id']}", flush=True)
+    return rows
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", default="lite")
     ap.add_argument("--cache-dir", default="cache/repos")
     ap.add_argument("--out", default="outputs/graph_rank_lite.json")
+    ap.add_argument("--config", help="evaluate one fixed setting on test, e.g. top_k=50,beta=0.5,restart=0.5")
     args = ap.parse_args()
+
+    if args.config:
+        from cgloc.eval.agent_report import bootstrap
+
+        cfg = dict(kv.split("=") for kv in args.config.split(","))
+        rows = evaluate_fixed(load_instances(args.dataset, "test"), Path(args.cache_dir),
+                              int(cfg["top_k"]), float(cfg["beta"]), float(cfg["restart"]))
+        Path(args.out).with_suffix(".per_instance.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+        report = {"config": args.config, "n": len(rows),
+                  "bm25": aggregate(r["bm25"] for r in rows), "ppr": aggregate(r["ppr"] for r in rows),
+                  "paired_bootstrap_ppr_minus_bm25": {
+                      k: dict(zip(("diff", "ci_lo", "ci_hi", "p"),
+                                  bootstrap([r["ppr"][k] for r in rows], [r["bm25"][k] for r in rows])))
+                      for k in ("acc@1", "acc@3", "acc@5", "acc@10", "mrr")}}
+        Path(args.out).write_text(json.dumps(report, indent=2))
+        print(json.dumps(report["paired_bootstrap_ppr_minus_bm25"], indent=2))
+        return
 
     dev = {k: aggregate(v) for k, v in evaluate(load_instances(args.dataset, "dev"), Path(args.cache_dir)).items()}
     best = max((k for k in dev if k != "bm25"), key=lambda k: (dev[k]["acc@5"], dev[k]["mrr"]))

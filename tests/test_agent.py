@@ -107,3 +107,39 @@ def test_normalize_near_misses():
                              "pkg/models.py::UNKNOWN_CONSTANT"], cg)
     assert ents == [f"{M}::Model.save", f"{M}::Model", "pkg/utils.py::slugify"]
     assert M in files
+
+
+def test_expanded_tools_show_edges_before_source():
+    from cgloc.agent.tools import expanded_graph_tools
+    _, cg, _ = _env()
+    tools = {t.name: t for t in expanded_graph_tools(cg)}
+    out = call_tool(tools, "read_entity", {"node": "Base.validate"})
+    assert f"called by: {M}::Base.save, {M}::Model.save" in out and out.index("called by") < out.index("def validate")
+    search = call_tool(tools, "search", {"query": "slugify"})
+    assert search.startswith("top hit pkg/utils.py::slugify") and f"called by: {M}::Model.slug" in search
+    assert set(tools) == {"search", "outline", "read_entity", "callers", "callees"}
+
+
+def test_provided_tools_emulate_harness():
+    import numpy as np
+    from cgloc.agent.tools import provided_tools
+    graph = {"nodes": [{"id": "pkg.models.Model.save", "text": "def save(self): ..."},
+                       {"id": "pkg.utils.log", "text": "def log(msg): ..."},
+                       {"id": "pkg.utils.slugify", "text": "def slugify(v): ..."}],
+             "edges": [{"source": "pkg.models.Model.save", "target": "pkg.utils.log", "type": "calls"}]}
+    emb = {"pkg.models.Model.save": np.array([1.0, 0.0]), "pkg.utils.log": np.array([0.9, 0.1]),
+           "pkg.utils.slugify": np.array([0.0, 1.0])}
+    tools = {t.name: t for t in provided_tools(graph, emb)}
+    nb = json.loads(call_tool(tools, "get_code_neighbors", {"node": "log"}))
+    assert nb == {"status": "ok", "node": "pkg.utils.log", "neighbors": ["pkg.models.Model.save"], "count": 1}
+    sim = json.loads(call_tool(tools, "search_similar_code", {"query": "Model.save", "k": 2}))
+    assert [r["node_name"] for r in sim["results"]] == ["pkg.utils.log", "pkg.utils.slugify"]
+    assert json.loads(call_tool(tools, "search_similar_code", {"query": "zzz"}))["status"] == "error"
+    sub = json.loads(call_tool(tools, "get_code_subgraph", {"nodes": ["Model.save", "pkg.utils.log"]}))
+    assert sub["edge_count"] == 1 and sub["edges"][0]["to"] == "pkg.utils.log"
+
+
+def test_normalize_dotted_symbols():
+    _, cg, _ = _env()
+    ents, _ = normalize(["pkg.models.Model.save", "pkg.utils.slugify", "other.core.run"], cg)
+    assert ents == [f"{M}::Model.save", "pkg/utils.py::slugify", "src/other/core.py::run"]

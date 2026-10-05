@@ -20,6 +20,8 @@ def main() -> None:
                     flags=re.S)
     meta = json.loads((ROOT / "agent_run" / "kernel-metadata.json").read_text())
     meta.update(id=f"{USER}/cgloc-{name}", title=f"cgloc {name}")
+    if any(r.get("dataset") == "competition" for r in cfg["runs"]):
+        meta["competition_sources"] = ["gemma-4-developer-agent"]
     out = ROOT / ".build" / name
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
