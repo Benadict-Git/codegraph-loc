@@ -22,17 +22,24 @@ redistributed; it is reproducible with `python -m cgloc.eval.run_provided` after
     ("code", "!pip install -q git+https://github.com/Benadict-Git/codegraph-loc"),
     ("code", """import glob, json, os, statistics as st
 from collections import defaultdict
-DATA = os.path.dirname(glob.glob('/kaggle/input/**/instances.jsonl', recursive=True)[0])
+matches = glob.glob('/kaggle/input/**/lite/instances.jsonl', recursive=True)
+if not matches:
+    matches = glob.glob('/kaggle/input/**/instances.jsonl', recursive=True)
+DATA = os.path.dirname(os.path.dirname(matches[0])) if 'lite' in matches[0] else os.path.dirname(matches[0])
 print(DATA, sorted(os.listdir(DATA)))
 read = lambda p: [json.loads(l) for l in open(os.path.join(DATA, p)) if l.strip()]"""),
     ("md", "## 1. Dataset scale (§3.1)"),
-    ("code", """stats = read('stats.jsonl')
+    ("code", """lite_stats = read('lite/stats.jsonl') if os.path.exists(os.path.join(DATA, 'lite/stats.jsonl')) else read('stats.jsonl')
+ver_stats = read('verified/stats.jsonl') if os.path.exists(os.path.join(DATA, 'verified/stats.jsonl')) else []
+stats = lite_stats + ver_stats
 tot = lambda k: sum(s.get(k, 0) for s in stats)
 med = lambda k: st.median(s.get(k, 0) for s in stats)
 print(f"instances: {len(stats)}")
 for k in ['files', 'nodes', 'edges_contains', 'edges_calls', 'edges_imports', 'edges_inherits', 'secs']:
     print(f"{k:16} total {tot(k):>12,.0f}   median {med(k):>9,.1f}")
-inst = read('instances.jsonl')
+lite_inst = read('lite/instances.jsonl') if os.path.exists(os.path.join(DATA, 'lite/instances.jsonl')) else read('instances.jsonl')
+ver_inst = read('verified/instances.jsonl') if os.path.exists(os.path.join(DATA, 'verified/instances.jsonl')) else []
+inst = lite_inst + ver_inst
 print('instances with >=1 gold entity:', sum(bool(i['gold']['entities']) for i in inst),
       '| single-file patches:', sum(len(i['gold']['files']) == 1 for i in inst))"""),
     ("md", "## 2. BM25 (§4.1) and BM25 + personalized PageRank (§4.2)"),
@@ -53,27 +60,43 @@ print('test BM25      ', pct(gr['test_bm25']))
 print('test BM25 + PPR', pct(gr['test_selected']))
 cfgs = [k for k in gr['test'] if k != 'bm25']
 print(f"grid settings beating BM25 on test Acc@5: {sum(gr['test'][k]['acc@5'] > gr['test_bm25']['acc@5'] for k in cfgs)}/{len(cfgs)}")"""),
-    ("md", "## 3. Gemma 4 agents on a free T4 (§4.4)\nE4B covers all 300 instances; 12B covers a 144-instance subset (see the writeup)."),
+    ("md", "## 3. Gemma 4 agents on a free T4 (§4.4)\nE4B covers all 300 Lite and 500 Verified instances; 12B covers the full 300 Lite instances."),
     ("code", """from cgloc.eval.agent_report import load, report
-A = os.path.join(DATA, 'results/agents')
+A = os.path.join(DATA, 'results')
 bm25 = load(os.path.join(DATA, 'results/bm25_lite.jsonl'))
-print(report(bm25, {'e4b_files': load(f'{A}/lite_e4b_files.jsonl'), 'e4b_graph': load(f'{A}/lite_e4b_graph.jsonl')}))
-print()
-print(report(bm25, {'12b_files': load(f'{A}/lite_12b_files.jsonl'), '12b_graph': load(f'{A}/lite_12b_graph.jsonl')}))"""),
+print("== Lite E4B ==")
+print(report(bm25, {'files': load(f'{A}/lite_e4b_files.rescored.jsonl'), 'graph': load(f'{A}/lite_e4b_graph.rescored.jsonl'), 'expanded': load(f'{A}/lite_e4b_expanded.rescored.jsonl')}))
+print("\\n== Lite 12B ==")
+files_12b = {**load(f'{A}/lite_12b_files.rescored.jsonl'), **load(f'{A}/lite_12b_files_rest.rescored.jsonl')}
+graph_12b = {**load(f'{A}/lite_12b_graph.rescored.jsonl'), **load(f'{A}/lite_12b_graph_rest.rescored.jsonl')}
+print(report(bm25, {'files': files_12b, 'graph': graph_12b}))
+print("\\n== Verified E4B ==")
+bm25_v = load(os.path.join(DATA, 'results/bm25_verified.jsonl'))
+print(report(bm25_v, {'files': load(f'{A}/verified_e4b_files.rescored.jsonl'), 'graph': load(f'{A}/verified_e4b_graph.rescored.jsonl')}))"""),
     ("code", """# One full trajectory (graph condition)
-r = next(iter(load(f'{A}/lite_e4b_graph.jsonl').values()))
+r = next(iter(load(f'{A}/lite_e4b_graph.rescored.jsonl').values()))
 print(r['instance_id'], '| gold:', r['gold']['entities'], '| predicted:', r['pred_entities'])
 for s in r['steps']:
     print(' ', s.get('tool', 'FINAL'), json.dumps(s.get('args', s.get('final')))[:120])"""),
-    ("md", "## 4. The `codegraph` API"),
+    ("md", "## 4. Failure taxonomy and hop analysis"),
+    ("code", """ft = json.load(open(os.path.join(DATA, 'results/failure_taxonomy.json')))
+print("Failure taxonomy:", json.dumps(ft, indent=2))
+ha = json.load(open(os.path.join(DATA, 'results/hop_analysis.json')))
+print("\\nHop analysis summary (gold code shown %):")
+for run, d in ha.items():
+    print(f"  {run:15} shown: {d.get('miss: gold code was shown', {}).get('pct', 0)}%  1-hop: {d.get('miss: gold 1 hop from seen/answered', {}).get('pct', 0)}%")"""),
+    ("md", "## 5. The `codegraph` API"),
     ("code", """from codegraph import CodeGraph, load_graph
-cg = CodeGraph(load_graph(os.path.join(DATA, 'graphs/django__django-11099.json')))
+cg_path = os.path.join(DATA, 'lite/graphs/django__django-11099.json')
+if not (os.path.exists(cg_path) or os.path.exists(cg_path + '.gz')):
+    cg_path = os.path.join(DATA, 'graphs/django__django-11099.json')
+cg = CodeGraph(load_graph(cg_path))
 print(len(cg.nodes), 'nodes')
 for h in cg.search('UsernameValidator', limit=5): print(' ', h['id'], h['kind'])
 target = cg.search('ASCIIUsernameValidator', kind='class')[0]['id']
 print('bases of', target, '->', cg.bases(target))
 print('outline:'); [print('  ' * lvl, n['id'].split('::')[1]) for lvl, n in cg.outline('django/contrib/auth/validators.py')]"""),
-    ("md", "## 5. Live re-run on `psf/requests` (clone, gold, graph, BM25)"),
+    ("md", "## 6. Live re-run on `psf/requests` (clone, gold, graph, BM25)"),
     ("code", """from pathlib import Path
 from cgloc.data.swebench import load_instances
 from cgloc.eval.run_bm25 import run_instance

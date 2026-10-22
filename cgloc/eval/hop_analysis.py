@@ -10,6 +10,7 @@ from pathlib import Path
 from cgloc.agent.run import owner_entity, prepare
 from cgloc.data.swebench import load_instances
 from cgloc.eval.graph_rank import entity_adjacency
+from codegraph import CodeGraph, load_graph
 
 _GREP_HIT = re.compile(r"^([\w./\-]+\.py):(\d+): ", re.M)
 READ_LINES = 120
@@ -59,7 +60,23 @@ def distance(adj: dict[str, set[str]], sources: set[str], targets: set[str], lim
     return None
 
 
-def analyze(run_path: Path, insts: dict[str, dict], cache_dir: Path) -> dict:
+def _get_cg(iid: str, inst: dict, cache_dir: Path, dataset: str, cg_cache: dict[str, CodeGraph]) -> CodeGraph:
+    if iid in cg_cache:
+        return cg_cache[iid]
+    for ext in (".json.gz", ".json"):
+        p = Path(f"outputs/dataset/{dataset}/graphs/{iid}{ext}")
+        if p.exists():
+            cg = CodeGraph(load_graph(p))
+            cg_cache[iid] = cg
+            return cg
+    _, cg, _ = prepare(inst, cache_dir)
+    cg_cache[iid] = cg
+    return cg
+
+
+def analyze(run_path: Path, insts: dict[str, dict], cache_dir: Path, dataset: str = "lite", cg_cache: dict[str, CodeGraph] | None = None) -> dict:
+    if cg_cache is None:
+        cg_cache = {}
     cats: Counter = Counter()
     for r in map(json.loads, run_path.read_text().splitlines()):
         gold = set(r["gold"]["entities"])
@@ -68,7 +85,7 @@ def analyze(run_path: Path, insts: dict[str, dict], cache_dir: Path) -> dict:
         if gold & set(r["pred_entities"][:5]):
             cats["hit (gold in answer)"] += 1
             continue
-        _, cg, _ = prepare(insts[r["instance_id"]], cache_dir)
+        cg = _get_cg(r["instance_id"], insts[r["instance_id"]], cache_dir, dataset, cg_cache)
         seen = seen_entities(r, cg)
         anchors = seen | set(r["pred_entities"])
         if gold & seen:
@@ -97,7 +114,8 @@ def main() -> None:
     ap.add_argument("--out", default="outputs/hop_analysis.json")
     args = ap.parse_args()
     insts = {i["instance_id"]: i for i in load_instances(args.dataset)}
-    report = {name: analyze(Path(path), insts, Path(args.cache_dir))
+    cg_cache: dict[str, CodeGraph] = {}
+    report = {name: analyze(Path(path), insts, Path(args.cache_dir), dataset=args.dataset, cg_cache=cg_cache)
               for name, path in (s.split("=", 1) for s in args.runs)}
     Path(args.out).write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
