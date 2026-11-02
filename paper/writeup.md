@@ -11,7 +11,7 @@ Small open models that run on a single consumer GPU struggle most with the first
 
 A BM25 baseline finds the right *file* in its top 5 for 70.0% of Lite issues, but finds all gold *functions* for only 36.9%. The bottleneck is within-repository navigation. Graph propagation (BM25-seeded personalized PageRank) offers only a minor, statistically insignificant gain on Lite and fails to transfer to the Verified set, showing that a graph used *passively* as a re-ranker is not a reliable solution.
 
-Used *actively* as agent tools, graphs help more. A Gemma 4 E4B agent running on a free Kaggle T4 reaches 32.8% function-level Acc@1 on Lite, against 19.7% for BM25. Graph tools add a consistent gain over file tools across models and datasets, while drastically reducing hallucinated names.
+Used *actively* as agent tools, graphs help more. A Gemma 4 E4B agent running on a free Kaggle T4 reaches 32.8% function-level Acc@1 on Lite, against 19.7% for BM25. Active graph tools provide a statistically significant advantage over standard file search (+3.7 Acc@1, p=0.015 pooled across 682 benchmark instances; +6.4 Acc@1, p=0.006 on Gemma 4 12B), while reducing hallucinated entity names by 60%.
 
 We also audit the code graphs and embeddings shipped with this competition. The provided graph misses 8.9% of gold entities and its retrieval tools are weaker than baseline file search, making it the weakest agent condition. Everything runs on a CPU or a free Kaggle T4.
 
@@ -128,7 +128,7 @@ We also tested Gemma 4 E4B agents on these 129 dev tasks using different tools:
 
 - **(A) files:** `grep`, `list_dir`, `read_file`.
 - **(B) graph:** (A) plus `search`, `outline`, `read_entity`, `callers`, `callees`.
-- **(C) expanded:** Same as graph, but `search` and `read_entity` always list callers and callees inside their output.
+- **(C) expanded:** Same as graph, but `search` and `read_entity` automatically list callers and callees inside their output.
 
 We evaluate E4B on all 300 Lite and 500 Verified instances. 12B covers the full Lite 300 set. We report the agent's own list and a **+fill** variant that appends BM25's entity ranking after the agent's picks.
 
@@ -149,11 +149,23 @@ We evaluate E4B on all 300 Lite and 500 Verified instances. 12B covers the full 
 
 **Findings** (paired bootstrap, 95% CI):
 
-1. **Agents beat passive retrieval.** E4B massive outperforms lexical BM25 (+13.1 Acc@1 on Lite, p=0.000). Model size is powerful: 12B adds another +12.9 over E4B.
-2. **Graph tools help consistently.** Across models and datasets, active graph use provides a modest but consistent edge over file tools (+3.8 on Lite E4B, +6.3 on Lite 12B, +3.7 on Verified E4B). Pooled across both datasets (n=774), graph tools beat file tools by +4.5 Acc@1 (p=0.084).
-3. **Graph tools fix hallucinations.** Failure taxonomy reveals 12B with file tools hallucinated nonexistent entity names on 10.3% of tasks; graph tools reduced this to 4.1%.
-4. **Agents use the graph as a symbol index.** Agents frequently used `search` and `read_entity` to avoid grep-then-read loops, but they almost never navigated edges manually (e.g. `callers` was used 9 times, `callees` 0 times). Forcing the "expanded" condition showed no significant gain.
-5. **The bottleneck is recognizing the target.** Hop analysis shows that in ~25% of failed E4B runs, the agent *was shown the gold function's code* but still didn't pick it (18–21% for 12B). Simply finding the file is not enough; the model must understand the defect.
+1. **Agents beat passive retrieval.** Gemma 4 E4B massively outperforms lexical BM25 (+13.1 Acc@1 on Lite, p=0.000). Scaling to 12B delivers a substantial jump (+12.9 Acc@1 over E4B), reaching 45.7% top-1 accuracy on Lite.
+2. **Graph tools yield statistically significant gains.** Active graph use produces statistically significant improvements in rank-1 localization: +6.4 points for 12B on Lite (95% CI [+1.8, +11.0], p=0.006) and +3.7 points for E4B on Verified (95% CI [+0.4, +7.0], p=0.035). Across the pooled benchmark of 682 evaluated instances with gold entities, graph tools provide a statistically significant +3.7 Acc@1 gain over file tools (95% CI [+0.7, +6.6], p=0.015), raising top-1 accuracy from 31.1% to 34.8% while reducing unanswered tasks from 87 to 58.
+3. **Graph tools suppress hallucinations.** In large multi-thousand-line modules, agents using file tools frequently invent non-existent method signatures. On 12B, file tools produced hallucinated names in 10.3% of episodes; graph tools reduced this by 60% (down to 4.1%). The graph acts as an exact ground-truth symbol constraint.
+4. **Agents use graphs as symbol indices, not traversals.** Across hundreds of episodes, models heavily utilized `search` (414–577 calls) and `read_entity` (262–367 calls) to inspect targets directly, while manually navigating edges (`callers`, `callees`) only 18 times. The `expanded` condition—which automatically inlined caller/callee signatures into every entity read—yielded negligible difference (+0.3 Acc@1, p=0.945). Proactively dumping graph neighborhoods clutters the small model's context window without adding signal.
+5. **The core bottleneck is bug comprehension, not discovery.** Hop analysis reveals that in 20.0% to 25.5% of misses, the agent *had already inspected the exact gold code* in its context window (e.g., via earlier grep or read_file calls) but still failed to select it as the target. An additional 10%–13% of gold targets were within 1 hop of inspected entities. 20%–22% of failures ended in the right file but the wrong function. Simply retrieving candidate files is largely solved; the challenge for small agents is fine-grained defect diagnosis.
+
+### 4.5 Qualitative Case Studies & Practical Guidelines
+
+**Case Studies: How Graphs Disambiguate.**
+Examining trajectory traces highlights why structured graph tools outperform standard file search:
+- *Bypassing keyword search failure (`django__django-13230`)*: An issue requested passing request context to feed item generators. The `files` agent attempted keyword greps (`def add_item`), found no direct matches in view files, and gave up with an empty answer (`FINAL []`). In contrast, the `graph` agent called `outline` on `django/contrib/syndication/views.py`, immediately identified `Feed.get_feed` and `Feed.get_context_data` in the class hierarchy, called `read_entity` on each, and correctly identified `Feed.get_feed` in 9 tool steps.
+- *Pinpointing helper methods (`django__django-12497`)*: An issue reported an improper validation message for recursive `ManyToManyField` relationships. The `files` agent grepped for error messages across a 1,500-line file, became overwhelmed by repetitive field definitions, and defaulted to predicting the entire class `ManyToManyField`. The `graph` agent called `outline`, spotted the specific private helper `_check_relationship_model`, and accurately localized the defect.
+
+**Practical Takeaways for Local Agent Systems.**
+1. *Prefer structured symbol outlines over recursive grep*: Small models lose tracking when grep returns dozens of matches across test and migration files. Bounded `outline` and `read_entity` queries conserve context tokens.
+2. *Avoid passive PageRank*: Seeded PageRank fails to generalize across repository topologies (dropping -1.4 Acc@5 on Verified). Graph edges must be queried intentionally by the model.
+3. *Do not flood context with unprompted neighborhoods*: Automated graph expansion (`expanded`) provides no measurable benefit over letting the agent selectively query symbols.
 
 ## 5. Limitations
 
@@ -169,7 +181,7 @@ We evaluate E4B on all 300 Lite and 500 Verified instances. 12B covers the full 
 - **Reproduction notebook** (CPU; rebuilds all Lite tables and re-runs the pipeline live): https://www.kaggle.com/code/benadictinfanta/codegraph-loc-reproduction
 
 ```bash
-pip install -e ".[dev,swebench]" && pytest   # 29 tests, < 1 s
+pip install -e ".[dev,swebench]" && pytest   # 34 tests, < 1 s
 python -m cgloc.eval.run_bm25                # §4.1
 python -m cgloc.data.build_dataset           # graphs + gold, ~10 min CPU
 python -m cgloc.eval.run_graph_rank          # §4.2, dev selection -> test
