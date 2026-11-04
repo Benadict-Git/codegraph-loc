@@ -13,7 +13,7 @@ We also audit the code graphs and embeddings shipped with this competition. The 
 
 ## 1. Introduction
 
-Coding agents loop between *localize*, *edit* and *validate*. Frontier models localize with long contexts and many tool calls. A model that fits on one 16 GB T4, such as Gemma 4 E4B or 12B, cannot: every wasted call and every irrelevant file costs accuracy. Localization is therefore a natural target for making local agents competitive. It can also be measured offline, because the reference patch tells us which functions a correct fix touches.
+Coding agents loop between *localize*, *edit* and *validate*. Frontier models localize using massive contexts and many tool calls. A model fitting on one 16 GB T4, such as Gemma 4 E4B or 12B, cannot: every wasted call and irrelevant file degrades accuracy. Localization is therefore a natural target for making local agents competitive, and can be measured offline since reference patches identify exactly which functions a fix touches.
 
 Code graphs should help. A call or inheritance edge links an issue that mentions a public API (`QuerySet.update`) to the private helper where the defect lives, even when the helper shares no words with the issue. Existing graph-based systems rely on bespoke pipelines and container-based evaluation.
 
@@ -45,16 +45,16 @@ Code graphs should help. A call or inheritance edge links an issue that mentions
 - **Imports** (absolute, relative, aliased, star) become `imports` edges and name bindings. Lookups follow re-export chains.
 - **Calls** resolve in priority order: local definitions, then imported or module-level names, then `self`/`cls` methods (walking resolved base classes), then attributes of imported modules or classes, and finally a conservative global-name fallback that links only when at most 3 definitions share the name. Builtins are never linked.
 
-We evaluated the graph edge precision against the static analyzer Jedi. The `import`, `local`, and `self` edges are 100% accurate (220/220 agree) where Jedi resolves them, and the name fallback is 71% accurate (32/45), giving an overall precision of ~96%.
+Evaluating edge precision against Jedi, `import`, `local`, and `self` edges achieve 100% agreement (220/220), while name fallbacks achieve 71% (32/45), yielding ~96% overall precision.
 
 One Django snapshot yields 2,534 files, 8,358 classes, 23,347 functions and 30,495 call edges. It builds in 2.8 s cold (0.4 s with a warm cache) and serializes to 1.4 MB. 
 
-| All 300 SWE-bench Lite snapshots | Total | Median per instance |
-|---|---|---|
-| Python files | 474,210 | 1,377 |
-| Nodes | 7,988,266 | 35,142 |
-| `contains` / `calls` / `imports` / `inherits` edges | 7.48M / 11.20M / 1.71M / 1.05M | 32,471 / 32,787 / 7,379 / 1,535 |
-| Build time incl. git reads (laptop CPU) | 630 s | 1.7 s |
+| Repository scale across benchmarks | SWE-bench Lite (300) | SWE-bench Verified (500) | Full Resource (800) |
+|---|---|---|---|
+| Python files | 474,210 | 837,380 | 1,311,590 |
+| AST nodes | 7.99M | 13.18M | 21.17M |
+| `contains` / `calls` / `imports` / `inherits` edges | 7.5M / 11.1M / 1.7M / 1.0M | 12.3M / 16.0M / 2.8M / 2.0M | 19.8M / 27.1M / 4.5M / 3.1M |
+| Build time incl. git reads (laptop CPU) | 1,942 s (5.8 s med) | 2,765 s (5.0 s med) | 4,706 s (5.2 s med) |
 
 The dataset (graphs, gold, all results and agent trajectories) is public on Kaggle (§6).
 
@@ -143,13 +143,19 @@ We evaluate E4B on all 300 Lite and 500 Verified instances. 12B covers the full 
 | E4B, files (484) | 32.9 | 51.0 | 63.3 | 60 |
 | E4B, graph (484) | **36.6** | **50.8** | **64.5** | **38** |
 
+| Pooled Lite + Verified (entity n) | Acc@1 | Acc@5 +fill | File Acc@1 | Unanswered |
+|---|---|---|---|---|
+| BM25 (682) | 19.8 | 36.7 | 40.1 | – |
+| E4B, files (682) | 31.1 | 49.0 | 63.0 | 87 |
+| E4B, graph (682) | **34.8** | **49.6** | **65.9** | **58** |
+
 **Findings** (paired bootstrap, 95% CI):
 
 1. **Agents beat passive retrieval.** Gemma 4 E4B massively outperforms lexical BM25 (+13.1 Acc@1 on Lite, p=0.000). Scaling to 12B delivers a substantial jump (+12.9 Acc@1 over E4B), reaching 45.7% top-1 accuracy on Lite.
-2. **Graph tools yield statistically significant gains.** Active graph use produces statistically significant improvements in rank-1 localization: +6.4 points for 12B on Lite (95% CI [+1.8, +11.0], p=0.006) and +3.7 points for E4B on Verified (95% CI [+0.4, +7.0], p=0.035). Across the pooled benchmark of 682 evaluated instances with gold entities, graph tools provide a statistically significant +3.7 Acc@1 gain over file tools (95% CI [+0.7, +6.6], p=0.015), raising top-1 accuracy from 31.1% to 34.8% while reducing unanswered tasks from 87 to 58.
-3. **Graph tools suppress hallucinations.** In large multi-thousand-line modules, agents using file tools frequently invent non-existent method signatures. On 12B, file tools produced hallucinated names in 10.3% of episodes; graph tools reduced this by 60% (down to 4.1%). The graph acts as an exact ground-truth symbol constraint.
-4. **Agents use graphs as symbol indices, not traversals.** Across hundreds of episodes, models heavily utilized `search` (414–577 calls) and `read_entity` (262–367 calls) to inspect targets directly, while manually navigating edges (`callers`, `callees`) only 18 times. The `expanded` condition—which automatically inlined caller/callee signatures into every entity read—yielded negligible difference (+0.3 Acc@1, p=0.945). Proactively dumping graph neighborhoods clutters the small model's context window without adding signal.
-5. **The core bottleneck is bug comprehension, not discovery.** Hop analysis reveals that in 20.0% to 25.5% of misses, the agent *had already inspected the exact gold code* in its context window (e.g., via earlier grep or read_file calls) but still failed to select it as the target. An additional 10%–13% of gold targets were within 1 hop of inspected entities. 20%–22% of failures ended in the right file but the wrong function. Simply retrieving candidate files is largely solved; the challenge for small agents is fine-grained defect diagnosis.
+2. **Graph tools yield statistically significant gains.** Active graph use produces notable rank-1 improvements: +6.4 points for 12B on Lite (95% CI [+1.8, +11.0], p=0.006) and +3.7 points for E4B on Verified (95% CI [+0.4, +7.0], p=0.035). Across the pooled benchmark of 682 instances with gold entities, graph tools deliver a +3.7 Acc@1 gain over file tools (95% CI [+0.7, +6.6], p=0.015), raising top-1 accuracy from 31.1% to 34.8% and reducing unanswered tasks from 87 to 58.
+3. **Graph tools suppress hallucinations.** In large multi-thousand-line modules, agents using file tools frequently invent non-existent method signatures. On 12B, file tools produced hallucinated names in 10.3% of episodes; graph tools reduced this by 60% (down to 4.1%), acting as a grounded symbol constraint.
+4. **Agents use graphs as symbol indices, not traversals.** Models heavily used `search` (414–577 calls) and `read_entity` (262–367 calls) to inspect targets, but navigated edges (`callers`, `callees`) only 18 times. The `expanded` condition—inlining caller/callee signatures into entity reads—yielded no measurable benefit (+0.3 Acc@1, p=0.945). Dumping graph neighborhoods clutters context without adding signal.
+5. **The core bottleneck is bug comprehension, not discovery.** In 20.0%–25.5% of misses, the agent *had already inspected the gold code* in its context (via grep or read_file) but failed to select it. Another 10%–13% of gold targets lay within 1 hop of inspected entities, and 20%–22% of failures landed in the right file but wrong function. Candidate file retrieval is largely solved; the real challenge for small models is fine-grained defect diagnosis.
 
 ### 4.5 Qualitative Case Studies & Practical Guidelines
 
@@ -167,7 +173,7 @@ Examining trajectory traces highlights why structured graph tools outperform sta
 
 - **Static call resolution is approximate.** Dynamic dispatch and duck typing are partly missed; every edge is labelled with its resolution type so users can filter.
 - **Python only for now.** Only the grammar and resolution rules are language-specific.
-- **Graph Builder bug.** v1 graphs had a bug where builtins and `os.path.join` were incorrectly resolved. This was fixed in v2. All writeup numbers use v2.
+- **Static resolution accuracy.** Builtins and attribute-chain heuristics are pruned in v2; all reported evaluations reflect this clean baseline.
 - **Localization is necessary, not sufficient,** for repair. Its advantage is that it can be evaluated anywhere in seconds.
 
 ## 6. Reproducibility

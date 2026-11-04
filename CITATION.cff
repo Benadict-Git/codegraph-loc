@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, code graphs, or benchmark dataset, please cite it as below."
+title: "CodeGraph-Loc: Laptop-Scale Code Graphs for Small-Agent Bug Localization"
+authors:
+  - family-names: "Infanta"
+    given-names: "Benadict"
+version: "1.0.0"
+date-released: "2024-11-04"
+url: "https://github.com/Benadict-Git/codegraph-loc"
+repository-code: "https://github.com/Benadict-Git/codegraph-loc"
+license: "Apache-2.0"
+keywords:
+  - code-graphs
+  - bug-localization
+  - llm-agents
+  - gemma
+  - swe-bench

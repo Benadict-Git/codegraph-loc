@@ -72,7 +72,13 @@ graph_12b = {**load(f'{A}/lite_12b_graph.rescored.jsonl'), **load(f'{A}/lite_12b
 print(report(bm25, {'files': files_12b, 'graph': graph_12b}))
 print("\\n== Verified E4B ==")
 bm25_v = load(os.path.join(DATA, 'results/bm25_verified.jsonl'))
-print(report(bm25_v, {'files': load(f'{A}/verified_e4b_files.rescored.jsonl'), 'graph': load(f'{A}/verified_e4b_graph.rescored.jsonl')}))"""),
+files_v = load(f'{A}/verified_e4b_files.rescored.jsonl')
+graph_v = load(f'{A}/verified_e4b_graph.rescored.jsonl')
+print(report(bm25_v, {'files': files_v, 'graph': graph_v}))
+print("\\n== Pooled Lite + Verified E4B ==")
+files_l = load(f'{A}/lite_e4b_files.rescored.jsonl')
+graph_l = load(f'{A}/lite_e4b_graph.rescored.jsonl')
+print(report({**bm25, **bm25_v}, {'files': {**files_l, **files_v}, 'graph': {**graph_l, **graph_v}}))"""),
     ("code", """# One full trajectory (graph condition)
 r = next(iter(load(f'{A}/lite_e4b_graph.rescored.jsonl').values()))
 print(r['instance_id'], '| gold:', r['gold']['entities'], '| predicted:', r['pred_entities'])

@@ -58,6 +58,36 @@ python -m cgloc.agent.run --condition graph --base-urls http://127.0.0.1:8080 --
 python -m cgloc.eval.agent_report files=outputs/files.jsonl graph=outputs/graph.jsonl
 ```
 
+## Benchmark Scale
+
+Pre-built code graphs and function-level gold locations across 800 SWE-bench instances (100% evaluated on CPU / free Kaggle T4):
+
+| Metric | SWE-bench Lite (300) | SWE-bench Verified (500) | Total Resource (800) |
+|---|---|---|---|
+| Python files | 474,210 | 837,380 | 1,311,590 |
+| AST nodes | 7.99M | 13.18M | 21.17M |
+| `contains` / `calls` / `imports` / `inherits` edges | 7.5M / 11.1M / 1.7M / 1.0M | 12.3M / 16.0M / 2.8M / 2.0M | 19.8M / 27.1M / 4.5M / 3.1M |
+| Build time incl. git reads (laptop CPU) | 1,942 s (5.8 s med) | 2,765 s (5.0 s med) | 4,706 s (5.2 s med) |
+
+## Key Findings
+
+- **Active graphs beat file search**: Gemma 4 12B gains +6.4 points Acc@1 ($p=0.006$), Gemma 4 E4B gains +3.7 points on Verified ($p=0.035$), and +3.7 points across the pooled benchmark of 682 evaluated instances ($p=0.015$).
+- **Hallucination suppression**: Grounded symbol tables reduce invented method names by 60% on 12B (10.3% $\to$ 4.1%).
+- **Passive graphs do not transfer**: Seeded personalized PageRank improves Lite dev but fails to transfer to Verified (-1.4 Acc@5), showing static graphs must be actively queried by models.
+- **Symbol lookup over traversal**: Small models use graphs as exact symbol indices (`search`, `read_entity`), rarely traversing edges; automated neighborhood expansion (`expanded`) clutters context without gain (+0.3 Acc@1, $p=0.945$).
+
 ## License
 
 Apache-2.0
+
+## Citation
+
+```bibtex
+@misc{infanta2024codegraphloc,
+  title={CodeGraph-Loc: Laptop-Scale Code Graphs for Small-Agent Bug Localization},
+  author={Infanta, Benadict},
+  year={2024},
+  publisher={Kaggle},
+  howpublished={\url{https://github.com/Benadict-Git/codegraph-loc}}
+}
+```
